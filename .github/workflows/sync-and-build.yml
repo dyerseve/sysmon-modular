@@ -1,0 +1,143 @@
+name: Sync Upstream and Build Sysmon Configs
+
+on:
+  schedule:
+    # Daily at 03:00 UTC
+    - cron: '0 3 * * *'
+
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-master:
+    name: Sync master from upstream
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout fork master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream and sync master
+        shell: pwsh
+        run: |
+          git remote add upstream https://github.com/olafhartong/sysmon-modular.git
+          git fetch upstream master
+
+          git checkout master
+          git merge upstream/master --no-edit
+
+          git push origin master
+
+  build-role-branches:
+    name: Build ${{ matrix.branch }} Sysmon XML
+    runs-on: windows-latest
+    needs: sync-master
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - branch: workstation
+            output_file: sysmonconfig.xml
+            friendly_name: Workstation
+
+          - branch: server
+            output_file: sysmonconfig.xml
+            friendly_name: Server
+
+          - branch: domain-controller
+            output_file: sysmonconfig.xml
+            friendly_name: Domain Controller
+
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Prepare role branch
+        shell: pwsh
+        run: |
+          $Branch = "${{ matrix.branch }}"
+
+          git fetch origin
+
+          $RemoteBranchExists = git ls-remote --heads origin $Branch
+
+          if ([string]:: {
+            Write-Host "Branch '$Branch' does not exist. Creating it from master."
+            git checkout -b $Branch origin/master
+            git push -u origin $Branch
+          }
+          else {
+            Write-Host "Branch '$Branch' already exists. Checking it out."
+            git checkout $Branch
+            git pull origin $Branch
+          }
+
+      - name: Merge latest master into role branch
+        shell: pwsh
+        run: |
+          git fetch origin master
+
+          git checkout ${{ matrix.branch }}
+          git merge origin/master --no-edit
+
+      - name: Ensure custom configuration folder exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path ".\0_custom_configuration")) {
+            New-Item -ItemType Directory -Path ".\0_custom_configuration" | Out-Null
+          }
+
+          if (-not (Test-Path ".\0_custom_configuration\excludelist.txt")) {
+            New-Item -ItemType File -Path ".\0_custom_configuration\excludelist.txt" | Out-Null
+          }
+
+      - name: Build Sysmon XML
+        shell: pwsh
+        run: |
+          . .\Merge-SysmonXml.ps1
+
+          Merge-AllSysmonXml `
+            -AsString `
+            -BasePath .\ `
+            -ExcludeList .\0_custom_configuration\excludelist.txt `
+            | Out-File ".\${{ matrix.output_file }}" -Encoding utf8
+
+      - name: Commit and push role branch changes
+        shell: pwsh
+        run: |
+          git add ".\${{ matrix.output_file }}"
+          git add ".\0_custom_configuration"
+
+          $Status = git status --porcelain
+
+          if (-not [string]:: {
+            git commit -m "Automated Sysmon XML rebuild for ${{ matrix.friendly_name }}"
+            git push origin ${{ matrix.branch }}
+          }
+          else {
+            Write-Host "No changes detected for ${{ matrix.branch }}."
+          }
+          
