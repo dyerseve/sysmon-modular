@@ -84,7 +84,7 @@ jobs:
 
           $RemoteBranchExists = git ls-remote --heads origin $Branch
 
-          if (:IsNullOrWhiteSpace($RemoteBranchExists)) {
+          if ([string]::IsNullOrEmpty($RemoteBranchExists)) {
             Write-Host "Branch '$Branch' does not exist. Creating it from master."
             git checkout -b $Branch origin/master
             git push -u origin $Branch
@@ -133,11 +133,10 @@ jobs:
 
           $Status = git status --porcelain
 
-          if (-not :IsNullOrWhiteSpace($Status)) {
+          if (-not [string]::IsNullOrEmpty($Status)) {
             git commit -m "Automated Sysmon XML rebuild for ${{ matrix.friendly_name }}"
             git push origin ${{ matrix.branch }}
           }
           else {
             Write-Host "No changes detected for ${{ matrix.branch }}."
           }
-          
